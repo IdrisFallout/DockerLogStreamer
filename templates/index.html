@@ -1,0 +1,357 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Docker Log Streamer</title>
+    <script src="https://cdn.socket.io/4.0.1/socket.io.min.js"></script>
+    <style>
+        body {
+            font-family: monospace;
+            background: #1a1a1a;
+            color: #fff;
+            margin: 0;
+            padding: 20px;
+        }
+        .header {
+            margin-bottom: 20px;
+        }
+        .settings-panel {
+            background: #333;
+            padding: 15px;
+            border-radius: 5px;
+            margin-bottom: 20px;
+        }
+        .settings-panel.collapsed {
+            display: none;
+        }
+        .settings-grid {
+            display: grid;
+            grid-template-columns: auto 1fr;
+            gap: 10px;
+            align-items: center;
+            max-width: 600px;
+        }
+        .settings-grid label {
+            font-weight: bold;
+        }
+        .settings-grid input {
+            background: #555;
+            border: 1px solid #666;
+            color: white;
+            padding: 8px;
+            border-radius: 3px;
+        }
+        .settings-grid input:focus {
+            outline: none;
+            border-color: #007acc;
+        }
+        .container {
+            display: flex;
+            height: 70vh;
+        }
+        .sidebar {
+            width: 300px;
+            background: #333;
+            padding: 10px;
+            margin-right: 20px;
+            border-radius: 5px;
+            overflow-y: auto;
+        }
+        .logs {
+            flex: 1;
+            background: #000;
+            padding: 10px;
+            border-radius: 5px;
+            overflow-y: auto;
+            font-size: 12px;
+            line-height: 1.4;
+        }
+        .container-item {
+            padding: 10px;
+            background: #555;
+            margin: 5px 0;
+            border-radius: 3px;
+            cursor: pointer;
+        }
+        .container-item:hover {
+            background: #666;
+        }
+        .container-item.active {
+            background: #007acc;
+        }
+        .log-line {
+            margin: 2px 0;
+        }
+        .stderr {
+            color: #ff6b6b;
+        }
+        .stdout {
+            color: #fff;
+        }
+        .system {
+            color: #4CAF50;
+            font-style: italic;
+        }
+        button {
+            background: #007acc;
+            color: white;
+            border: none;
+            padding: 8px 15px;
+            margin: 5px;
+            border-radius: 3px;
+            cursor: pointer;
+        }
+        button:disabled {
+            background: #555;
+            cursor: not-allowed;
+        }
+        button.secondary {
+            background: #666;
+        }
+        .status {
+            display: inline-block;
+            padding: 5px 10px;
+            border-radius: 3px;
+            font-size: 12px;
+            font-weight: bold;
+        }
+        .status.connected {
+            background: #4CAF50;
+            color: white;
+        }
+        .status.disconnected {
+            background: #f44336;
+            color: white;
+        }
+        .status.docker-connected {
+            background: #2196F3;
+            color: white;
+        }
+        .loading {
+            text-align: center;
+            color: #999;
+            padding: 20px;
+        }
+        .connection-info {
+            font-size: 12px;
+            color: #999;
+            margin-left: 10px;
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h2>🐳 Docker Log Streamer</h2>
+        <button id="settingsToggle" onclick="toggleSettings()">⚙️ Settings</button>
+        <button onclick="connectDocker()" id="dockerConnectBtn">Connect to Docker</button>
+        <button onclick="refreshContainers()" id="refreshBtn" disabled>Refresh</button>
+        <button id="connectBtn" onclick="toggleConnection()" disabled>Connect</button>
+        <button onclick="clearLogs()">Clear</button>
+        <span id="dockerStatus" class="status disconnected">Docker: Disconnected</span>
+        <span id="logStatus" class="status disconnected">Logs: Disconnected</span>
+        <span id="connectionInfo" class="connection-info"></span>
+    </div>
+
+    <div class="settings-panel" id="settingsPanel">
+        <h3>Docker Connection Settings</h3>
+        <div class="settings-grid">
+            <label for="dockerUrl">Docker URL:</label>
+            <input type="text" id="dockerUrl" placeholder="https://docker.example.com or http://192.168.1.100:2375" value="">
+
+            <label for="dockerUsername">Username (optional):</label>
+            <input type="text" id="dockerUsername" placeholder="Leave empty if no auth required" value="">
+
+            <label for="dockerPassword">Password (optional):</label>
+            <input type="password" id="dockerPassword" placeholder="Leave empty if no auth required" value="">
+        </div>
+        <p style="font-size: 12px; color: #999; margin-top: 10px;">
+            Examples: http://localhost:2375, https://docker.myserver.com, http://192.168.1.100:2376<br>
+            Leave credentials empty for Docker APIs without authentication.
+        </p>
+    </div>
+
+    <div class="container">
+        <div class="sidebar">
+            <div id="containers" class="loading">Configure Docker connection first</div>
+        </div>
+        <div class="logs" id="logs">Select a container to view logs</div>
+    </div>
+
+    <script>
+        const socket = io();
+        let selectedContainer = null;
+        let isLogsConnected = false;
+        let isDockerConnected = false;
+
+        socket.on('connect', function() {
+            console.log('Socket connected');
+        });
+
+        socket.on('docker_connected', function(data) {
+            isDockerConnected = true;
+            document.getElementById('dockerStatus').textContent = 'Docker: Connected';
+            document.getElementById('dockerStatus').className = 'status docker-connected';
+            document.getElementById('connectionInfo').textContent = `Connected to: ${data.url}`;
+            document.getElementById('refreshBtn').disabled = false;
+            document.getElementById('dockerConnectBtn').textContent = 'Disconnect Docker';
+            refreshContainers();
+        });
+
+        socket.on('docker_disconnected', function() {
+            isDockerConnected = false;
+            document.getElementById('dockerStatus').textContent = 'Docker: Disconnected';
+            document.getElementById('dockerStatus').className = 'status disconnected';
+            document.getElementById('connectionInfo').textContent = '';
+            document.getElementById('refreshBtn').disabled = true;
+            document.getElementById('connectBtn').disabled = true;
+            document.getElementById('dockerConnectBtn').textContent = 'Connect to Docker';
+            document.getElementById('containers').innerHTML = 'Configure Docker connection first';
+
+            if (isLogsConnected) {
+                toggleConnection();
+            }
+        });
+
+        socket.on('containers', function(containers) {
+            const containersDiv = document.getElementById('containers');
+            if (!Array.isArray(containers) || containers.length === 0) {
+                containersDiv.innerHTML = '<div>No containers found</div>';
+                return;
+            }
+
+            containersDiv.innerHTML = containers.map(container =>
+                `<div class="container-item" onclick="selectContainer('${container.id}', '${container.name}')" data-id="${container.id}">
+                    <strong>${container.name || '(no-name)'}</strong><br>
+                    <small>${(container.id || '').substring(0, 12)}</small><br>
+                    <small>${container.image || ''}</small><br>
+                    <small style="color: ${container.state === 'running' ? '#4CAF50' : '#ff6b6b'}">${container.state || ''}</small>
+                </div>`
+            ).join('');
+        });
+
+        socket.on('log', function(data) {
+            const logsDiv = document.getElementById('logs');
+            const logLine = document.createElement('div');
+            logLine.className = `log-line ${data.stream || 'stdout'}`;
+            let timeStr = '';
+            if (data.timestamp) {
+                try {
+                    timeStr = '[' + new Date(data.timestamp).toLocaleTimeString() + '] ';
+                } catch (e) {
+                    timeStr = '';
+                }
+            }
+            logLine.textContent = `${timeStr}${data.message}`;
+            logsDiv.appendChild(logLine);
+            logsDiv.scrollTop = logsDiv.scrollHeight;
+        });
+
+        socket.on('error', function(data) {
+            const logsDiv = document.getElementById('logs');
+            const logLine = document.createElement('div');
+            logLine.className = 'log-line system';
+            logLine.textContent = `ERROR: ${data.message}`;
+            logsDiv.appendChild(logLine);
+            alert('Error: ' + data.message);
+        });
+
+        function toggleSettings() {
+            const panel = document.getElementById('settingsPanel');
+            const button = document.getElementById('settingsToggle');
+
+            if (panel.classList.contains('collapsed')) {
+                panel.classList.remove('collapsed');
+                button.textContent = '⚙️ Hide Settings';
+            } else {
+                panel.classList.add('collapsed');
+                button.textContent = '⚙️ Settings';
+            }
+        }
+
+        function connectDocker() {
+            if (isDockerConnected) {
+                // Disconnect
+                socket.emit('disconnect_docker');
+                return;
+            }
+
+            const url = document.getElementById('dockerUrl').value.trim();
+            const username = document.getElementById('dockerUsername').value.trim();
+            const password = document.getElementById('dockerPassword').value.trim();
+
+            if (!url) {
+                alert('Please enter a Docker URL');
+                return;
+            }
+
+            // Basic URL validation
+            if (!url.startsWith('http://') && !url.startsWith('https://')) {
+                alert('Docker URL must start with http:// or https://');
+                return;
+            }
+
+            socket.emit('connect_docker', {
+                url: url,
+                username: username || null,
+                password: password || null
+            });
+
+            document.getElementById('dockerConnectBtn').disabled = true;
+            document.getElementById('dockerConnectBtn').textContent = 'Connecting...';
+        }
+
+        function refreshContainers() {
+            if (!isDockerConnected) {
+                alert('Connect to Docker first');
+                return;
+            }
+            socket.emit('get_containers');
+        }
+
+        function selectContainer(containerId, containerName) {
+            selectedContainer = { id: containerId, name: containerName };
+
+            // Update UI
+            document.querySelectorAll('.container-item').forEach(item => {
+                item.classList.remove('active');
+            });
+            const containerElement = document.querySelector(`[data-id="${containerId}"]`);
+            if (containerElement) {
+                containerElement.classList.add('active');
+            }
+            document.getElementById('connectBtn').disabled = false;
+
+            if (isLogsConnected) {
+                toggleConnection(); // Disconnect first
+            }
+        }
+
+        function toggleConnection() {
+            if (isLogsConnected) {
+                socket.emit('stop_logs');
+                isLogsConnected = false;
+                document.getElementById('connectBtn').textContent = 'Connect';
+                document.getElementById('logStatus').textContent = 'Logs: Disconnected';
+                document.getElementById('logStatus').className = 'status disconnected';
+            } else {
+                if (selectedContainer && isDockerConnected) {
+                    socket.emit('start_logs', { container_id: selectedContainer.id });
+                    isLogsConnected = true;
+                    document.getElementById('connectBtn').textContent = 'Disconnect';
+                    document.getElementById('logStatus').textContent = 'Logs: Connected';
+                    document.getElementById('logStatus').className = 'status connected';
+                } else {
+                    alert('Select a container and connect to Docker first');
+                }
+            }
+        }
+
+        function clearLogs() {
+            document.getElementById('logs').innerHTML = '';
+        }
+
+        // Initialize settings panel as collapsed
+        document.getElementById('settingsPanel').classList.add('collapsed');
+        document.getElementById('settingsToggle').textContent = '⚙️ Settings';
+    </script>
+</body>
+</html>

@@ -1,357 +1,332 @@
-from flask import Flask, render_template_string
-from flask_socketio import SocketIO, emit
-import docker
 import threading
-import json
 from datetime import datetime
+from typing import Optional
+
+import requests
+from flask import Flask, request, render_template
+from flask_socketio import SocketIO
+from requests.auth import HTTPBasicAuth
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'docker-streamer-secret'
-socketio = SocketIO(app, cors_allowed_origins="*")
+# Use threading async mode so this works without eventlet/gevent (useful on Windows)
+socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading')
 
-# Initialize Docker client
-try:
-    # For Docker on custom port 2375
-    client = docker.DockerClient(base_url='tcp://localhost:2375')
-    client.ping()
-    print("✅ Docker connection successful on port 2375")
-except Exception as e:
-    print(f"❌ Docker connection failed: {e}")
-    try:
-        # Fallback to default socket
-        client = docker.from_env()
-        client.ping()
-        print("✅ Docker connection successful using default socket")
-    except Exception as e2:
-        print(f"❌ All Docker connection methods failed: {e2}")
-        client = None
+# Store user sessions and their docker clients
+user_sessions: dict[str, dict] = {}
+# active_streams maps "sid:container_id" -> {"thread": Thread, "stop_event": Event}
+active_streams: dict[str, dict] = {}
 
-# Store active streams
-active_streams = {}
 
-HTML_TEMPLATE = '''
-<!DOCTYPE html>
-<html>
-<head>
-    <title>Docker Log Streamer</title>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
-    <style>
-        body { 
-            font-family: monospace; 
-            background: #1a1a1a; 
-            color: #fff; 
-            margin: 0; 
-            padding: 20px; 
-        }
-        .header { 
-            margin-bottom: 20px; 
-        }
-        .container { 
-            display: flex; 
-            height: 80vh; 
-        }
-        .sidebar { 
-            width: 300px; 
-            background: #333; 
-            padding: 10px; 
-            margin-right: 20px; 
-            border-radius: 5px;
-            overflow-y: auto;
-        }
-        .logs { 
-            flex: 1; 
-            background: #000; 
-            padding: 10px; 
-            border-radius: 5px;
-            overflow-y: auto;
-            font-size: 12px;
-            line-height: 1.4;
-        }
-        .container-item { 
-            padding: 10px; 
-            background: #555; 
-            margin: 5px 0; 
-            border-radius: 3px; 
-            cursor: pointer; 
-        }
-        .container-item:hover { 
-            background: #666; 
-        }
-        .container-item.active { 
-            background: #007acc; 
-        }
-        .log-line { 
-            margin: 2px 0; 
-        }
-        .stderr { 
-            color: #ff6b6b; 
-        }
-        .stdout { 
-            color: #fff; 
-        }
-        .system { 
-            color: #4CAF50; 
-            font-style: italic; 
-        }
-        button { 
-            background: #007acc; 
-            color: white; 
-            border: none; 
-            padding: 8px 15px; 
-            margin: 5px; 
-            border-radius: 3px; 
-            cursor: pointer; 
-        }
-        button:disabled { 
-            background: #555; 
-            cursor: not-allowed; 
-        }
-        .status { 
-            display: inline-block; 
-            padding: 5px 10px; 
-            border-radius: 3px; 
-            font-size: 12px; 
-            font-weight: bold; 
-        }
-        .status.connected { 
-            background: #4CAF50; 
-            color: white; 
-        }
-        .status.disconnected { 
-            background: #f44336; 
-            color: white; 
-        }
-        .loading { 
-            text-align: center; 
-            color: #999; 
-            padding: 20px; 
-        }
-    </style>
-</head>
-<body>
-    <div class="header">
-        <h2>🐳 Docker Log Streamer</h2>
-        <button onclick="refreshContainers()">Refresh</button>
-        <button id="connectBtn" onclick="toggleConnection()" disabled>Connect</button>
-        <button onclick="clearLogs()">Clear</button>
-        <span id="status" class="status disconnected">Disconnected</span>
-    </div>
+class DockerAPIClient:
+    def __init__(self, base_url: str, username: Optional[str] = None, password: Optional[str] = None):
+        self.base_url = base_url.rstrip('/')
+        self.auth = HTTPBasicAuth(username, password) if username and password else None
 
-    <div class="container">
-        <div class="sidebar">
-            <div id="containers" class="loading">Loading containers...</div>
-        </div>
-        <div class="logs" id="logs">Select a container to view logs</div>
-    </div>
+    def list_containers(self, all: bool = False):
+        url = f"{self.base_url}/containers/json"
+        params = {'all': str(all).lower()}
+        try:
+            kwargs = {'params': params, 'timeout': 10}
+            if self.auth:
+                kwargs['auth'] = self.auth
 
-    <script>
-        const socket = io();
-        let selectedContainer = null;
-        let isConnected = false;
+            response = requests.get(url, **kwargs)
+            response.raise_for_status()
+            return response.json()
+        except Exception as e:
+            print(f"Error listing containers: {e}")
+            return None
 
-        socket.on('connect', function() {
-            refreshContainers();
-        });
+    def stream_logs_generator(self, container_id: str, stop_event: threading.Event, follow: bool = True, tail: int = 50):
+        """
+        Generator that yields log lines until stop_event is set.
+        Handles Docker's multiplexed stdout/stderr header if present.
+        """
+        url = f"{self.base_url}/containers/{container_id}/logs"
+        params = {
+            'follow': str(follow).lower(),
+            'stdout': 'true',
+            'stderr': 'true',
+            'timestamps': 'false',
+            'tail': str(tail)
+        }
 
-        socket.on('containers', function(containers) {
-            const containersDiv = document.getElementById('containers');
-            if (containers.length === 0) {
-                containersDiv.innerHTML = '<div>No running containers</div>';
-                return;
+        try:
+            kwargs = {
+                'params': params,
+                'stream': True,
+                'timeout': (10, None)  # connect timeout, no read timeout
             }
+            if self.auth:
+                kwargs['auth'] = self.auth
 
-            containersDiv.innerHTML = containers.map(container => 
-                `<div class="container-item" onclick="selectContainer('${container.id}', '${container.name}')" data-id="${container.id}">
-                    <strong>${container.name}</strong><br>
-                    <small>${container.id.substring(0, 12)}</small><br>
-                    <small>${container.image}</small>
-                </div>`
-            ).join('');
-        });
+            response = requests.get(url, **kwargs)
+            response.raise_for_status()
 
-        socket.on('log', function(data) {
-            const logsDiv = document.getElementById('logs');
-            const logLine = document.createElement('div');
-            logLine.className = `log-line ${data.stream}`;
-            logLine.textContent = `[${new Date(data.timestamp).toLocaleTimeString()}] ${data.message}`;
-            logsDiv.appendChild(logLine);
-            logsDiv.scrollTop = logsDiv.scrollHeight;
-        });
+            buffer = b''
+            for chunk in response.iter_content(chunk_size=1024):
+                if stop_event.is_set():
+                    break
+                if not chunk:
+                    continue
+                buffer += chunk
+                while b'\n' in buffer:
+                    line, buffer = buffer.split(b'\n', 1)
+                    if not line:
+                        continue
+                    try:
+                        # Docker may return multiplexed frames: 8-byte header then payload
+                        # header format: 1 byte stream type (0=stdin,1=stdout,2=stderr), 3 bytes zeros, 4 byte length
+                        # We operate on raw bytes:
+                        payload = line
+                        if len(payload) >= 8:
+                            first_byte = payload[0]
+                            # if first_byte looks like 1 or 2 (stdout/stderr), assume multiplexed -> strip 8
+                            if first_byte in (1, 2):
+                                payload = payload[8:]
 
-        socket.on('error', function(data) {
-            const logsDiv = document.getElementById('logs');
-            const logLine = document.createElement('div');
-            logLine.className = 'log-line system';
-            logLine.textContent = `ERROR: ${data.message}`;
-            logsDiv.appendChild(logLine);
-        });
+                        decoded_line = payload.decode('utf-8', errors='ignore').rstrip('\r')
+                        cleaned_line = decoded_line.strip()
+                        if cleaned_line:
+                            yield cleaned_line
+                    except Exception as e:
+                        print(f"Error decoding log line: {e}")
+                        # skip problematic line
+                        continue
 
-        function refreshContainers() {
-            socket.emit('get_containers');
-        }
+                # check stop_event again in case it's set while processing buffer
+                if stop_event.is_set():
+                    break
 
-        function selectContainer(containerId, containerName) {
-            selectedContainer = { id: containerId, name: containerName };
-
-            // Update UI
-            document.querySelectorAll('.container-item').forEach(item => {
-                item.classList.remove('active');
-            });
-            document.querySelector(`[data-id="${containerId}"]`).classList.add('active');
-            document.getElementById('connectBtn').disabled = false;
-
-            if (isConnected) {
-                toggleConnection(); // Disconnect first
-            }
-        }
-
-        function toggleConnection() {
-            if (isConnected) {
-                socket.emit('stop_logs');
-                isConnected = false;
-                document.getElementById('connectBtn').textContent = 'Connect';
-                document.getElementById('status').textContent = 'Disconnected';
-                document.getElementById('status').className = 'status disconnected';
-            } else {
-                if (selectedContainer) {
-                    socket.emit('start_logs', { container_id: selectedContainer.id });
-                    isConnected = true;
-                    document.getElementById('connectBtn').textContent = 'Disconnect';
-                    document.getElementById('status').textContent = 'Connected';
-                    document.getElementById('status').className = 'status connected';
-                }
-            }
-        }
-
-        function clearLogs() {
-            document.getElementById('logs').innerHTML = '';
-        }
-    </script>
-</body>
-</html>
-'''
-
+        except Exception as e:
+            print(f"Error streaming logs from Docker API: {e}")
+            # propagate to caller so they can emit error
+            raise
 
 @app.route('/')
 def index():
-    return render_template_string(HTML_TEMPLATE)
+    return render_template("index.html")
+
+
+def get_user_session(sid: str):
+    """Get or create user session"""
+    if sid not in user_sessions:
+        user_sessions[sid] = {
+            'docker_client': None,
+            'docker_url': None,
+            'connected': False
+        }
+    return user_sessions[sid]
+
+
+@socketio.on('connect_docker')
+def connect_docker(data):
+    sid = request.sid
+    session = get_user_session(sid)
+
+    try:
+        url = data['url'].strip()
+        username = data.get('username')
+        password = data.get('password')
+
+        # Create Docker client for this user
+        docker_client = DockerAPIClient(url, username, password)
+
+        # Test connection
+        containers = docker_client.list_containers()
+        if containers is None:
+            raise Exception("Failed to connect to Docker API")
+
+        # Store successful connection
+        session['docker_client'] = docker_client
+        session['docker_url'] = url
+        session['connected'] = True
+
+        # Emit only to this client
+        socketio.emit('docker_connected', {'url': url, 'containers_count': len(containers)}, room=sid)
+        print(f"User {sid} connected to Docker at {url}")
+
+    except Exception as e:
+        error_msg = f"Docker connection failed: {str(e)}"
+        print(f"Docker connection error for user {sid}: {error_msg}")
+        socketio.emit('error', {'message': error_msg}, room=sid)
+
+    finally:
+        # signal client UI to re-enable connect button
+        socketio.emit('docker_connect_ready', room=sid)
+
+
+@socketio.on('disconnect_docker')
+def disconnect_docker():
+    sid = request.sid
+    session = get_user_session(sid)
+
+    # Stop any active log streams for this user
+    stop_user_streams(sid)
+
+    # Clear docker connection
+    session['docker_client'] = None
+    session['docker_url'] = None
+    session['connected'] = False
+
+    socketio.emit('docker_disconnected', room=sid)
+    print(f"User {sid} disconnected from Docker")
 
 
 @socketio.on('get_containers')
 def get_containers():
-    if not client:
-        emit('error', {'message': 'Docker not connected'})
+    sid = request.sid
+    session = get_user_session(sid)
+
+    if not session['connected'] or not session['docker_client']:
+        socketio.emit('error', {'message': 'Not connected to Docker'}, room=sid)
         return
 
     try:
-        containers = client.containers.list(filters={'status': 'running'})
-        container_list = []
+        containers_data = session['docker_client'].list_containers(all=True)
+        if containers_data is None:
+            socketio.emit('error', {'message': 'Failed to get containers from Docker API'}, room=sid)
+            return
 
-        for container in containers:
+        container_list = []
+        for container in containers_data:
             container_list.append({
-                'id': container.id,
-                'name': container.name,
-                'image': container.image.tags[0] if container.image.tags else 'unknown'
+                'id': container.get('Id'),
+                'name': (container.get('Names') or [''])[0].lstrip('/') if container.get('Names') else '',
+                'image': container.get('Image'),
+                'state': container.get('State')
             })
 
-        emit('containers', container_list)
+        socketio.emit('containers', container_list, room=sid)
+
     except Exception as e:
-        emit('error', {'message': f'Failed to get containers: {str(e)}'})
+        print(f"Error getting containers for user {sid}: {e}")
+        socketio.emit('error', {'message': f'Failed to get containers: {str(e)}'}, room=sid)
 
 
 @socketio.on('start_logs')
 def start_logs(data):
-    if not client:
-        emit('error', {'message': 'Docker not connected'})
+    sid = request.sid
+    session = get_user_session(sid)
+    container_id = data.get('container_id')
+
+    if not container_id:
+        socketio.emit('error', {'message': 'No container_id provided'}, room=sid)
         return
 
-    container_id = data['container_id']
+    if not session['connected'] or not session['docker_client']:
+        socketio.emit('error', {'message': 'Not connected to Docker'}, room=sid)
+        return
+
+    # Create unique stream key for this user and container
+    stream_key = f"{sid}:{container_id}"
 
     # Stop existing stream if any
-    if container_id in active_streams:
-        stop_stream(container_id)
+    if stream_key in active_streams:
+        stop_stream(stream_key)
 
     try:
-        container = client.containers.get(container_id)
+        stop_event = threading.Event()
 
-        def stream_logs():
+        def stream_logs(stop_event: threading.Event):
             try:
-                for log in container.logs(stream=True, follow=True, stdout=True, stderr=True):
-                    if container_id not in active_streams:
+                # Send connection message
+                socketio.emit('log', {
+                    'message': f'Connected to container logs...',
+                    'stream': 'system',
+                    'timestamp': datetime.now().isoformat()
+                }, room=sid)
+
+                # Iterate over lines from Docker API
+                for log_message in session['docker_client'].stream_logs_generator(container_id, stop_event, follow=True, tail=50):
+                    if stop_event.is_set():
                         break
 
-                    message = log.decode('utf-8', errors='ignore').strip()
-                    if message:
+                    if log_message and log_message.strip():
                         socketio.emit('log', {
-                            'message': message,
+                            'message': log_message,
                             'stream': 'stdout',
                             'timestamp': datetime.now().isoformat()
-                        })
+                        }, room=sid)
 
             except Exception as e:
-                socketio.emit('error', {'message': f'Log stream error: {str(e)}'})
+                print(f"Log streaming error for user {sid}: {e}")
+                socketio.emit('error', {'message': f'Log stream error: {str(e)}'}, room=sid)
             finally:
-                if container_id in active_streams:
-                    del active_streams[container_id]
+                # Clean up mapping if present
+                if stream_key in active_streams:
+                    try:
+                        del active_streams[stream_key]
+                    except KeyError:
+                        pass
+                socketio.emit('log', {
+                    'message': 'Log stream ended',
+                    'stream': 'system',
+                    'timestamp': datetime.now().isoformat()
+                }, room=sid)
 
-        # Start streaming in background thread
-        thread = threading.Thread(target=stream_logs)
-        thread.daemon = True
-        active_streams[container_id] = thread
+        # Start the thread
+        thread = threading.Thread(target=stream_logs, args=(stop_event,), daemon=True)
+        active_streams[stream_key] = {'thread': thread, 'stop_event': stop_event}
         thread.start()
 
-        emit('log', {
-            'message': f'Connected to container: {container.name}',
-            'stream': 'system',
-            'timestamp': datetime.now().isoformat()
-        })
-
     except Exception as e:
-        emit('error', {'message': f'Failed to start logs: {str(e)}'})
+        print(f"Error starting logs for user {sid}: {e}")
+        socketio.emit('error', {'message': f'Failed to start logs: {str(e)}'}, room=sid)
 
 
 @socketio.on('stop_logs')
-def stop_logs():
-    # Stop all active streams
-    for container_id in list(active_streams.keys()):
-        stop_stream(container_id)
+def handle_stop_logs():
+    sid = request.sid
+    # Stop all streams for this user
+    stop_user_streams(sid)
+
+    socketio.emit('log', {
+        'message': 'Disconnected from logs',
+        'stream': 'system',
+        'timestamp': datetime.now().isoformat()
+    }, room=sid)
 
 
-def stop_stream(container_id):
-    if container_id in active_streams:
-        del active_streams[container_id]
+def stop_stream(stream_key: str):
+    """Signal the stream's stop_event and remove it from active_streams."""
+    info = active_streams.get(stream_key)
+    if not info:
+        return
+    ev = info.get('stop_event')
+    if isinstance(ev, threading.Event):
+        ev.set()
+    # Remove mapping immediately; thread's finally will tolerate absence
+    try:
+        del active_streams[stream_key]
+    except KeyError:
+        pass
+
+
+def stop_user_streams(sid: str):
+    keys = [k for k in list(active_streams.keys()) if k.startswith(f"{sid}:")]
+    for k in keys:
+        stop_stream(k)
 
 
 @socketio.on('disconnect')
-def disconnect():
-    # Clean up streams when client disconnects
-    stop_logs()
+def on_disconnect():
+    sid = request.sid
+    print(f"Client {sid} disconnected")
+
+    # Clean up user session streams
+    stop_user_streams(sid)
+
+    # Remove user session
+    if sid in user_sessions:
+        del user_sessions[sid]
 
 
 if __name__ == '__main__':
-    print("🐳 Starting Docker Log Streamer...")
+    print("🐳 Starting Multi-User Docker Log Streamer...")
     print("📱 Open http://localhost:5000 in your browser")
+    print("⚙️ Configure your Docker connection in the Settings panel")
+
+    # debug=True is fine for development
     socketio.run(app, debug=True, host='0.0.0.0', port=5000)
-
-# Installation Instructions
-"""
-1. Install dependencies:
-   pip install flask flask-socketio docker
-
-2. Make sure Docker is running on your system
-
-3. Run the application:
-   python app.py
-
-4. Open http://localhost:5000 in your browser
-
-Features:
-- Lists running Docker containers
-- Real-time log streaming
-- Simple, clean interface  
-- Minimal code for prototype use
-
-Note: Make sure your user has Docker permissions:
-sudo usermod -aG docker $USER
-(then logout and login again)
-"""
