@@ -5,153 +5,334 @@
     <script src="https://cdn.socket.io/4.0.1/socket.io.min.js"></script>
     <style>
         body {
-            font-family: monospace;
-            background: #1a1a1a;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #1e1e1e 0%, #2d2d2d 100%);
             color: #fff;
             margin: 0;
             padding: 20px;
+            min-height: 100vh;
         }
+
         .header {
+            background: rgba(255,255,255,0.1);
+            padding: 20px;
+            border-radius: 12px;
             margin-bottom: 20px;
+            backdrop-filter: blur(10px);
+            box-shadow: 0 8px 32px rgba(0,0,0,0.2);
         }
+
+        .header h2 {
+            margin: 0 0 15px 0;
+            font-size: 24px;
+            background: linear-gradient(45deg, #4FC3F7, #29B6F6);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        .control-row {
+            display: flex;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 10px;
+            margin-bottom: 10px;
+        }
+
         .settings-panel {
-            background: #333;
-            padding: 15px;
-            border-radius: 5px;
+            background: rgba(255,255,255,0.1);
+            padding: 20px;
+            border-radius: 12px;
             margin-bottom: 20px;
+            backdrop-filter: blur(10px);
+            transition: all 0.3s ease;
+            overflow: hidden;
         }
+
         .settings-panel.collapsed {
-            display: none;
+            max-height: 0;
+            padding: 0 20px;
+            margin-bottom: 0;
+            opacity: 0;
         }
+
         .settings-grid {
             display: grid;
             grid-template-columns: auto 1fr;
-            gap: 10px;
+            gap: 15px;
             align-items: center;
             max-width: 600px;
         }
+
         .settings-grid label {
-            font-weight: bold;
+            font-weight: 600;
+            color: #B0BEC5;
         }
+
         .settings-grid input {
-            background: #555;
-            border: 1px solid #666;
+            background: rgba(255,255,255,0.1);
+            border: 2px solid rgba(255,255,255,0.2);
             color: white;
-            padding: 8px;
-            border-radius: 3px;
+            padding: 12px;
+            border-radius: 8px;
+            font-size: 14px;
+            transition: border-color 0.3s ease;
         }
+
         .settings-grid input:focus {
             outline: none;
-            border-color: #007acc;
+            border-color: #29B6F6;
+            box-shadow: 0 0 0 3px rgba(41, 182, 246, 0.2);
         }
+
         .container {
             display: flex;
-            height: 70vh;
+            height: calc(100vh - 300px);
+            gap: 20px;
+            min-height: 500px;
         }
+
         .sidebar {
-            width: 300px;
-            background: #333;
-            padding: 10px;
-            margin-right: 20px;
-            border-radius: 5px;
+            width: 320px;
+            background: rgba(255,255,255,0.1);
+            padding: 20px;
+            border-radius: 12px;
             overflow-y: auto;
+            backdrop-filter: blur(10px);
         }
+
+        .logs-container {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            background: rgba(0,0,0,0.8);
+            border-radius: 12px;
+            overflow: hidden;
+        }
+
+        .logs-controls {
+            background: rgba(255,255,255,0.1);
+            padding: 15px 20px;
+            display: flex;
+            align-items: center;
+            gap: 15px;
+            border-bottom: 1px solid rgba(255,255,255,0.1);
+        }
+
         .logs {
             flex: 1;
-            background: #000;
-            padding: 10px;
-            border-radius: 5px;
+            padding: 15px 20px;
             overflow-y: auto;
+            font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+            font-size: 13px;
+            line-height: 1.5;
+            white-space: pre-wrap;
+            word-break: break-all;
+            background: #000;
+        }
+
+        .container-item {
+            padding: 15px;
+            background: rgba(255,255,255,0.1);
+            margin: 8px 0;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            border: 2px solid transparent;
+        }
+
+        .container-item:hover {
+            background: rgba(255,255,255,0.2);
+            transform: translateY(-1px);
+        }
+
+        .container-item.active {
+            background: rgba(41, 182, 246, 0.3);
+            border-color: #29B6F6;
+        }
+
+        .container-name {
+            font-weight: 600;
+            font-size: 14px;
+            margin-bottom: 5px;
+        }
+
+        .container-details {
             font-size: 12px;
+            color: #B0BEC5;
             line-height: 1.4;
         }
-        .container-item {
-            padding: 10px;
-            background: #555;
-            margin: 5px 0;
-            border-radius: 3px;
-            cursor: pointer;
-        }
-        .container-item:hover {
-            background: #666;
-        }
-        .container-item.active {
-            background: #007acc;
-        }
+
         .log-line {
-            margin: 2px 0;
+            margin: 1px 0;
+            font-family: inherit;
+            white-space: pre-wrap;
+            word-wrap: break-word;
         }
+
         .stderr {
             color: #ff6b6b;
         }
+
         .stdout {
-            color: #fff;
+            color: #ffffff;
         }
+
         .system {
             color: #4CAF50;
             font-style: italic;
         }
+
         button {
-            background: #007acc;
+            background: linear-gradient(45deg, #29B6F6, #1E88E5);
             color: white;
             border: none;
-            padding: 8px 15px;
-            margin: 5px;
-            border-radius: 3px;
+            padding: 10px 18px;
+            margin: 2px;
+            border-radius: 8px;
             cursor: pointer;
+            font-weight: 600;
+            transition: all 0.3s ease;
+            box-shadow: 0 4px 15px rgba(41, 182, 246, 0.3);
         }
+
+        button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(41, 182, 246, 0.4);
+        }
+
         button:disabled {
             background: #555;
             cursor: not-allowed;
+            transform: none;
+            box-shadow: none;
         }
+
         button.secondary {
-            background: #666;
+            background: linear-gradient(45deg, #666, #777);
+            box-shadow: 0 4px 15px rgba(0,0,0,0.3);
         }
+
+        button.danger {
+            background: linear-gradient(45deg, #f44336, #d32f2f);
+            box-shadow: 0 4px 15px rgba(244, 67, 54, 0.3);
+        }
+
+        button.success {
+            background: linear-gradient(45deg, #4CAF50, #388E3C);
+            box-shadow: 0 4px 15px rgba(76, 175, 80, 0.3);
+        }
+
         .status {
-            display: inline-block;
-            padding: 5px 10px;
-            border-radius: 3px;
+            display: inline-flex;
+            align-items: center;
+            padding: 6px 12px;
+            border-radius: 20px;
             font-size: 12px;
-            font-weight: bold;
+            font-weight: 600;
+            margin: 2px;
         }
+
         .status.connected {
-            background: #4CAF50;
+            background: linear-gradient(45deg, #4CAF50, #388E3C);
             color: white;
         }
+
         .status.disconnected {
-            background: #f44336;
+            background: linear-gradient(45deg, #f44336, #d32f2f);
             color: white;
         }
+
         .status.docker-connected {
-            background: #2196F3;
+            background: linear-gradient(45deg, #2196F3, #1976D2);
             color: white;
         }
+
         .loading {
             text-align: center;
-            color: #999;
-            padding: 20px;
+            color: #B0BEC5;
+            padding: 40px 20px;
+            font-style: italic;
         }
+
         .connection-info {
             font-size: 12px;
-            color: #999;
+            color: #B0BEC5;
             margin-left: 10px;
+            opacity: 0.8;
         }
+
+        .checkbox-container {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .checkbox-container input[type="checkbox"] {
+            width: 18px;
+            height: 18px;
+            accent-color: #29B6F6;
+        }
+
+        .checkbox-container label {
+            font-size: 13px;
+            color: #B0BEC5;
+            cursor: pointer;
+        }
+
+        .logs-info {
+            font-size: 11px;
+            color: #777;
+            margin-left: auto;
+        }
+
+        .ansi-black { color: #000000; }
+        .ansi-red { color: #cd0000; }
+        .ansi-green { color: #00cd00; }
+        .ansi-yellow { color: #cdcd00; }
+        .ansi-blue { color: #0000ee; }
+        .ansi-magenta { color: #cd00cd; }
+        .ansi-cyan { color: #00cdcd; }
+        .ansi-white { color: #e5e5e5; }
+        .ansi-bright-black { color: #7f7f7f; }
+        .ansi-bright-red { color: #ff0000; }
+        .ansi-bright-green { color: #00ff00; }
+        .ansi-bright-yellow { color: #ffff00; }
+        .ansi-bright-blue { color: #5c5cff; }
+        .ansi-bright-magenta { color: #ff00ff; }
+        .ansi-bright-cyan { color: #00ffff; }
+        .ansi-bright-white { color: #ffffff; }
+        .ansi-bold { font-weight: bold; }
+        .ansi-dim { opacity: 0.6; }
+        .ansi-underline { text-decoration: underline; }
+        .ansi-bg-black { background-color: #000000; }
+        .ansi-bg-red { background-color: #cd0000; }
+        .ansi-bg-green { background-color: #00cd00; }
+        .ansi-bg-yellow { background-color: #cdcd00; }
+        .ansi-bg-blue { background-color: #0000ee; }
+        .ansi-bg-magenta { background-color: #cd00cd; }
+        .ansi-bg-cyan { background-color: #00cdcd; }
+        .ansi-bg-white { background-color: #e5e5e5; }
     </style>
 </head>
 <body>
     <div class="header">
         <h2>🐳 Docker Log Streamer</h2>
-        <button id="settingsToggle" onclick="toggleSettings()">⚙️ Settings</button>
-        <button onclick="connectDocker()" id="dockerConnectBtn">Connect to Docker</button>
-        <button onclick="refreshContainers()" id="refreshBtn" disabled>Refresh</button>
-        <button id="connectBtn" onclick="toggleConnection()" disabled>Connect</button>
-        <button onclick="clearLogs()">Clear</button>
-        <span id="dockerStatus" class="status disconnected">Docker: Disconnected</span>
-        <span id="logStatus" class="status disconnected">Logs: Disconnected</span>
-        <span id="connectionInfo" class="connection-info"></span>
+        <div class="control-row">
+            <button id="settingsToggle" onclick="toggleSettings()">⚙️ Settings</button>
+            <button onclick="toggleDockerConnection()" id="dockerConnectBtn" class="success">Connect to Docker</button>
+            <button onclick="refreshContainers()" id="refreshBtn" class="secondary" disabled>🔄 Refresh</button>
+            <button id="connectBtn" onclick="toggleLogConnection()" disabled>Start Logs</button>
+            <button onclick="clearLogs()" class="secondary">🗑️ Clear</button>
+        </div>
+        <div class="control-row">
+            <span id="dockerStatus" class="status disconnected">Docker: Disconnected</span>
+            <span id="logStatus" class="status disconnected">Logs: Disconnected</span>
+            <span id="connectionInfo" class="connection-info"></span>
+        </div>
     </div>
 
-    <div class="settings-panel" id="settingsPanel">
+    <div class="settings-panel collapsed" id="settingsPanel">
         <h3>Docker Connection Settings</h3>
         <div class="settings-grid">
             <label for="dockerUrl">Docker URL:</label>
@@ -163,17 +344,39 @@
             <label for="dockerPassword">Password (optional):</label>
             <input type="password" id="dockerPassword" placeholder="Leave empty if no auth required" value="">
         </div>
-        <p style="font-size: 12px; color: #999; margin-top: 10px;">
+        <p style="font-size: 12px; color: #B0BEC5; margin-top: 15px;">
             Examples: http://localhost:2375, https://docker.myserver.com, http://192.168.1.100:2376<br>
-            Leave credentials empty for Docker APIs without authentication.
+            Settings are automatically saved in your browser.
         </p>
+        <button onclick="saveSettings()" class="success">💾 Save Settings</button>
+        <button onclick="clearSettings()" class="danger">🗑️ Clear Saved Settings</button>
     </div>
 
     <div class="container">
         <div class="sidebar">
+            <h3 style="margin-top: 0; color: #B0BEC5;">Containers</h3>
             <div id="containers" class="loading">Configure Docker connection first</div>
         </div>
-        <div class="logs" id="logs">Select a container to view logs</div>
+        <div class="logs-container">
+            <div class="logs-controls">
+                <div class="checkbox-container">
+                    <input type="checkbox" id="autoScroll" checked>
+                    <label for="autoScroll">Auto-scroll</label>
+                </div>
+                <div class="checkbox-container">
+                    <input type="checkbox" id="showTimestamps" checked>
+                    <label for="showTimestamps">Timestamps</label>
+                </div>
+                <div class="checkbox-container">
+                    <input type="checkbox" id="wordWrap" checked>
+                    <label for="wordWrap">Word wrap</label>
+                </div>
+                <button onclick="scrollToBottom()" class="secondary">⬇️ Bottom</button>
+                <button onclick="scrollToTop()" class="secondary">⬆️ Top</button>
+                <div class="logs-info" id="logsInfo">Ready</div>
+            </div>
+            <div class="logs" id="logs">Select a container to view logs</div>
+        </div>
     </div>
 
     <script>
@@ -181,7 +384,102 @@
         let selectedContainer = null;
         let isLogsConnected = false;
         let isDockerConnected = false;
+        let logCount = 0;
+        let autoScrollEnabled = true;
 
+        // Load settings on page load
+        window.onload = function() {
+            loadSettings();
+        };
+
+        // Settings management
+        function saveSettings() {
+            const settings = {
+                dockerUrl: document.getElementById('dockerUrl').value,
+                dockerUsername: document.getElementById('dockerUsername').value,
+                dockerPassword: document.getElementById('dockerPassword').value,
+                autoScroll: document.getElementById('autoScroll').checked,
+                showTimestamps: document.getElementById('showTimestamps').checked,
+                wordWrap: document.getElementById('wordWrap').checked
+            };
+
+            // Store in browser's local storage
+            Object.keys(settings).forEach(key => {
+                if (settings[key]) {
+                    localStorage.setItem(`dockerLogStreamer_${key}`, settings[key]);
+                } else {
+                    localStorage.removeItem(`dockerLogStreamer_${key}`);
+                }
+            });
+
+            showNotification('Settings saved successfully!', 'success');
+        }
+
+        function loadSettings() {
+            // Auto-load settings from localStorage
+            const fields = ['dockerUrl', 'dockerUsername', 'dockerPassword'];
+            fields.forEach(field => {
+                const value = localStorage.getItem(`dockerLogStreamer_${field}`);
+                if (value) {
+                    document.getElementById(field).value = value;
+                }
+            });
+
+            const checkboxes = ['autoScroll', 'showTimestamps', 'wordWrap'];
+            checkboxes.forEach(field => {
+                const value = localStorage.getItem(`dockerLogStreamer_${field}`);
+                if (value !== null) {
+                    document.getElementById(field).checked = value === 'true';
+                }
+            });
+
+            // Auto-connect if settings are available
+            const dockerUrl = localStorage.getItem('dockerLogStreamer_dockerUrl');
+            if (dockerUrl) {
+                showNotification('Settings loaded. Ready to connect!', 'info');
+                document.getElementById('settingsToggle').textContent = '⚙️ Settings ✓';
+            }
+        }
+
+        function clearSettings() {
+            Object.keys(localStorage).forEach(key => {
+                if (key.startsWith('dockerLogStreamer_')) {
+                    localStorage.removeItem(key);
+                }
+            });
+
+            document.getElementById('dockerUrl').value = '';
+            document.getElementById('dockerUsername').value = '';
+            document.getElementById('dockerPassword').value = '';
+            document.getElementById('autoScroll').checked = true;
+            document.getElementById('showTimestamps').checked = true;
+            document.getElementById('wordWrap').checked = true;
+
+            showNotification('Settings cleared!', 'info');
+            document.getElementById('settingsToggle').textContent = '⚙️ Settings';
+        }
+
+        // Auto-save settings when changed
+        document.getElementById('autoScroll').addEventListener('change', function() {
+            autoScrollEnabled = this.checked;
+            saveSettings();
+        });
+
+        document.getElementById('showTimestamps').addEventListener('change', saveSettings);
+        document.getElementById('wordWrap').addEventListener('change', function() {
+            const logsDiv = document.getElementById('logs');
+            logsDiv.style.whiteSpace = this.checked ? 'pre-wrap' : 'pre';
+            saveSettings();
+        });
+
+        function showNotification(message, type = 'info') {
+            document.getElementById('logsInfo').textContent = message;
+            setTimeout(() => {
+                document.getElementById('logsInfo').textContent = `Logs: ${logCount}`;
+            }, 3000);
+        }
+
+        // Socket event handlers
         socket.on('connect', function() {
             console.log('Socket connected');
         });
@@ -192,8 +490,10 @@
             document.getElementById('dockerStatus').className = 'status docker-connected';
             document.getElementById('connectionInfo').textContent = `Connected to: ${data.url}`;
             document.getElementById('refreshBtn').disabled = false;
-            document.getElementById('dockerConnectBtn').textContent = 'Disconnect Docker';
+            document.getElementById('dockerConnectBtn').textContent = '🔌 Disconnect Docker';
+            document.getElementById('dockerConnectBtn').className = 'danger';
             refreshContainers();
+            showNotification('Docker connected successfully!', 'success');
         });
 
         socket.on('docker_disconnected', function() {
@@ -204,26 +504,32 @@
             document.getElementById('refreshBtn').disabled = true;
             document.getElementById('connectBtn').disabled = true;
             document.getElementById('dockerConnectBtn').textContent = 'Connect to Docker';
-            document.getElementById('containers').innerHTML = 'Configure Docker connection first';
+            document.getElementById('dockerConnectBtn').className = 'success';
+            document.getElementById('containers').innerHTML = '<div class="loading">Configure Docker connection first</div>';
 
             if (isLogsConnected) {
-                toggleConnection();
+                toggleLogConnection();
             }
+            showNotification('Docker disconnected', 'info');
         });
 
         socket.on('containers', function(containers) {
             const containersDiv = document.getElementById('containers');
             if (!Array.isArray(containers) || containers.length === 0) {
-                containersDiv.innerHTML = '<div>No containers found</div>';
+                containersDiv.innerHTML = '<div class="loading">No containers found</div>';
                 return;
             }
 
             containersDiv.innerHTML = containers.map(container =>
                 `<div class="container-item" onclick="selectContainer('${container.id}', '${container.name}')" data-id="${container.id}">
-                    <strong>${container.name || '(no-name)'}</strong><br>
-                    <small>${(container.id || '').substring(0, 12)}</small><br>
-                    <small>${container.image || ''}</small><br>
-                    <small style="color: ${container.state === 'running' ? '#4CAF50' : '#ff6b6b'}">${container.state || ''}</small>
+                    <div class="container-name">${container.name || '(no-name)'}</div>
+                    <div class="container-details">
+                        ID: ${(container.id || '').substring(0, 12)}<br>
+                        Image: ${container.image || 'unknown'}<br>
+                        <span style="color: ${container.state === 'running' ? '#4CAF50' : '#ff6b6b'}">
+                            Status: ${container.state || 'unknown'}
+                        </span>
+                    </div>
                 </div>`
             ).join('');
         });
@@ -232,17 +538,28 @@
             const logsDiv = document.getElementById('logs');
             const logLine = document.createElement('div');
             logLine.className = `log-line ${data.stream || 'stdout'}`;
+
             let timeStr = '';
-            if (data.timestamp) {
+            if (data.timestamp && document.getElementById('showTimestamps').checked) {
                 try {
                     timeStr = '[' + new Date(data.timestamp).toLocaleTimeString() + '] ';
                 } catch (e) {
                     timeStr = '';
                 }
             }
-            logLine.textContent = `${timeStr}${data.message}`;
+
+            // Process ANSI escape codes for terminal formatting
+            const processedMessage = processAnsiCodes(data.message);
+            logLine.innerHTML = `${timeStr}${processedMessage}`;
+
             logsDiv.appendChild(logLine);
-            logsDiv.scrollTop = logsDiv.scrollHeight;
+            logCount++;
+
+            if (autoScrollEnabled && document.getElementById('autoScroll').checked) {
+                logsDiv.scrollTop = logsDiv.scrollHeight;
+            }
+
+            document.getElementById('logsInfo').textContent = `Logs: ${logCount}`;
         });
 
         socket.on('error', function(data) {
@@ -251,9 +568,37 @@
             logLine.className = 'log-line system';
             logLine.textContent = `ERROR: ${data.message}`;
             logsDiv.appendChild(logLine);
-            alert('Error: ' + data.message);
+            showNotification('Error: ' + data.message, 'error');
         });
 
+        // ANSI escape code processing
+        function processAnsiCodes(text) {
+            return text
+                .replace(/\u001b\[0m/g, '</span>')
+                .replace(/\u001b\[1m/g, '<span class="ansi-bold">')
+                .replace(/\u001b\[2m/g, '<span class="ansi-dim">')
+                .replace(/\u001b\[4m/g, '<span class="ansi-underline">')
+                .replace(/\u001b\[30m/g, '<span class="ansi-black">')
+                .replace(/\u001b\[31m/g, '<span class="ansi-red">')
+                .replace(/\u001b\[32m/g, '<span class="ansi-green">')
+                .replace(/\u001b\[33m/g, '<span class="ansi-yellow">')
+                .replace(/\u001b\[34m/g, '<span class="ansi-blue">')
+                .replace(/\u001b\[35m/g, '<span class="ansi-magenta">')
+                .replace(/\u001b\[36m/g, '<span class="ansi-cyan">')
+                .replace(/\u001b\[37m/g, '<span class="ansi-white">')
+                .replace(/\u001b\[90m/g, '<span class="ansi-bright-black">')
+                .replace(/\u001b\[91m/g, '<span class="ansi-bright-red">')
+                .replace(/\u001b\[92m/g, '<span class="ansi-bright-green">')
+                .replace(/\u001b\[93m/g, '<span class="ansi-bright-yellow">')
+                .replace(/\u001b\[94m/g, '<span class="ansi-bright-blue">')
+                .replace(/\u001b\[95m/g, '<span class="ansi-bright-magenta">')
+                .replace(/\u001b\[96m/g, '<span class="ansi-bright-cyan">')
+                .replace(/\u001b\[97m/g, '<span class="ansi-bright-white">')
+                .replace(/\u001b\[\d+;\d+m/g, '') // Remove unsupported codes
+                .replace(/\u001b\[\d+m/g, ''); // Remove other codes
+        }
+
+        // UI Functions
         function toggleSettings() {
             const panel = document.getElementById('settingsPanel');
             const button = document.getElementById('settingsToggle');
@@ -263,13 +608,13 @@
                 button.textContent = '⚙️ Hide Settings';
             } else {
                 panel.classList.add('collapsed');
-                button.textContent = '⚙️ Settings';
+                const hasSettings = localStorage.getItem('dockerLogStreamer_dockerUrl');
+                button.textContent = hasSettings ? '⚙️ Settings ✓' : '⚙️ Settings';
             }
         }
 
-        function connectDocker() {
+        function toggleDockerConnection() {
             if (isDockerConnected) {
-                // Disconnect
                 socket.emit('disconnect_docker');
                 return;
             }
@@ -279,13 +624,12 @@
             const password = document.getElementById('dockerPassword').value.trim();
 
             if (!url) {
-                alert('Please enter a Docker URL');
+                showNotification('Please enter a Docker URL', 'error');
                 return;
             }
 
-            // Basic URL validation
             if (!url.startsWith('http://') && !url.startsWith('https://')) {
-                alert('Docker URL must start with http:// or https://');
+                showNotification('Docker URL must start with http:// or https://', 'error');
                 return;
             }
 
@@ -297,20 +641,23 @@
 
             document.getElementById('dockerConnectBtn').disabled = true;
             document.getElementById('dockerConnectBtn').textContent = 'Connecting...';
+
+            // Auto-save settings when connecting
+            saveSettings();
         }
 
         function refreshContainers() {
             if (!isDockerConnected) {
-                alert('Connect to Docker first');
+                showNotification('Connect to Docker first', 'error');
                 return;
             }
             socket.emit('get_containers');
+            showNotification('Refreshing containers...', 'info');
         }
 
         function selectContainer(containerId, containerName) {
             selectedContainer = { id: containerId, name: containerName };
 
-            // Update UI
             document.querySelectorAll('.container-item').forEach(item => {
                 item.classList.remove('active');
             });
@@ -321,37 +668,65 @@
             document.getElementById('connectBtn').disabled = false;
 
             if (isLogsConnected) {
-                toggleConnection(); // Disconnect first
+                toggleLogConnection();
             }
+
+            showNotification(`Selected: ${containerName}`, 'info');
         }
 
-        function toggleConnection() {
+        function toggleLogConnection() {
             if (isLogsConnected) {
                 socket.emit('stop_logs');
                 isLogsConnected = false;
-                document.getElementById('connectBtn').textContent = 'Connect';
+                document.getElementById('connectBtn').textContent = 'Start Logs';
+                document.getElementById('connectBtn').className = '';
                 document.getElementById('logStatus').textContent = 'Logs: Disconnected';
                 document.getElementById('logStatus').className = 'status disconnected';
+                showNotification('Log streaming stopped', 'info');
             } else {
                 if (selectedContainer && isDockerConnected) {
                     socket.emit('start_logs', { container_id: selectedContainer.id });
                     isLogsConnected = true;
-                    document.getElementById('connectBtn').textContent = 'Disconnect';
+                    document.getElementById('connectBtn').textContent = 'Stop Logs';
+                    document.getElementById('connectBtn').className = 'danger';
                     document.getElementById('logStatus').textContent = 'Logs: Connected';
                     document.getElementById('logStatus').className = 'status connected';
+                    logCount = 0;
+                    showNotification(`Streaming logs from ${selectedContainer.name}`, 'success');
                 } else {
-                    alert('Select a container and connect to Docker first');
+                    showNotification('Select a container and connect to Docker first', 'error');
                 }
             }
         }
 
         function clearLogs() {
             document.getElementById('logs').innerHTML = '';
+            logCount = 0;
+            document.getElementById('logsInfo').textContent = 'Logs: 0';
+            showNotification('Logs cleared', 'info');
         }
 
-        // Initialize settings panel as collapsed
-        document.getElementById('settingsPanel').classList.add('collapsed');
-        document.getElementById('settingsToggle').textContent = '⚙️ Settings';
+        function scrollToBottom() {
+            const logsDiv = document.getElementById('logs');
+            logsDiv.scrollTop = logsDiv.scrollHeight;
+        }
+
+        function scrollToTop() {
+            const logsDiv = document.getElementById('logs');
+            logsDiv.scrollTop = 0;
+        }
+
+        // Handle manual scrolling to disable auto-scroll temporarily
+        document.getElementById('logs').addEventListener('scroll', function() {
+            const logsDiv = this;
+            const isAtBottom = logsDiv.scrollTop + logsDiv.clientHeight >= logsDiv.scrollHeight - 5;
+
+            if (!isAtBottom && autoScrollEnabled) {
+                autoScrollEnabled = false;
+                document.getElementById('autoScroll').checked = false;
+                showNotification('Auto-scroll disabled (manual scroll detected)', 'info');
+            }
+        });
     </script>
 </body>
 </html>
